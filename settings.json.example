@@ -1,0 +1,11 @@
+{
+  "mcp_endpoint": "http://localhost:13337",
+  "mcp_mode": "headless",
+  "ida_dir": "C:\\Program Files\\IDA Pro",
+  "idat_timeout": 600.0,
+  "max_workers": 3,
+  "decompile_timeout": 30.0,
+  "retry_count": 2,
+  "artifacts_dir": "artifacts",
+  "outputs_dir": "outputs"
+}

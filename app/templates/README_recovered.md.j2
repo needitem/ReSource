@@ -1,0 +1,44 @@
+# Recovered Project: {{ project.dll_name }}
+
+> **AUTO-GENERATED** by ReSource Recover. This is a best-effort reconstruction,
+> not the original source code.
+
+## Summary
+
+| Metric | Value |
+|--------|-------|
+| Total functions | {{ project.total_functions }} |
+| Successfully placed | {{ project.placed_functions }} |
+| Failed | {{ project.failed_functions }} |
+| Placement rate | {{ project.placement_pct }}% |
+
+## Modules
+
+{% for module_name, funcs in modules.items() %}
+### `src/{{ module_name }}.c`
+- {{ funcs | length }} functions
+- HIGH confidence: {{ funcs | selectattr('confidence_level', 'equalto', 'HIGH') | list | length }}
+- MEDIUM confidence: {{ funcs | selectattr('confidence_level', 'equalto', 'MEDIUM') | list | length }}
+- LOW confidence: {{ funcs | selectattr('confidence_level', 'equalto', 'LOW') | list | length }}
+
+{% endfor %}
+
+## Confidence Legend
+
+| Level | Score | Meaning |
+|-------|-------|---------|
+| HIGH | 70-100 | Decompile + types + callgraph all successful |
+| MEDIUM | 40-69 | Partial success; some types inferred |
+| LOW | 0-39 | Mostly guessed; review carefully |
+
+## Limitations
+
+- Variable names are IDA-generated (e.g. `v1`, `v2`)
+- Struct field names may be wrong
+- Virtual function tables not always resolved
+- C++ constructors/destructors may be misclassified
+- Inlined functions appear in multiple places
+
+## Legal Notice
+
+Use only on binaries you are authorized to analyze.

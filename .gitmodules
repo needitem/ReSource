@@ -1,0 +1,3 @@
+[submodule "ida-pro-mcp"]
+	path = ida-pro-mcp
+	url = https://github.com/mrexodia/ida-pro-mcp.git
