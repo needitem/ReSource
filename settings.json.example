@@ -7,5 +7,6 @@
   "decompile_timeout": 30.0,
   "retry_count": 2,
   "artifacts_dir": "artifacts",
-  "outputs_dir": "outputs"
+  "outputs_dir": "outputs",
+  "dotnet_ref_paths": []
 }

@@ -80,14 +80,23 @@ cp settings.json.example settings.json
 
 ### .NET 참조 경로 예시
 
+**Mono 게임 (BepInEx):**
 ```json
 "dotnet_ref_paths": [
-  "C:/Games/Heartopia/Heartopia_Data/Managed",
-  "C:/Games/Heartopia/BepInEx/core"
+  "C:/Games/MyGame/MyGame_Data/Managed",
+  "C:/Games/MyGame/BepInEx/core"
 ]
 ```
 
-Unity 게임의 경우 `<게임폴더>/<게임명>_Data/Managed` 폴더를 등록하면
+**Il2Cpp 게임 (MelonLoader):**
+```json
+"dotnet_ref_paths": [
+  "C:/Games/MyGame/MelonLoader/Il2CppAssemblies",
+  "C:/Games/MyGame/MelonLoader/net6"
+]
+```
+
+게임 타입에 맞는 어셈블리 폴더를 등록하면
 `//IL_xxxx: Unknown result type` 주석 없이 깔끔하게 디컴파일됩니다.
 
 ## 실행
