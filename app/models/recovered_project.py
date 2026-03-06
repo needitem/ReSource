@@ -4,13 +4,13 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class RecoveredFile(BaseModel):
     relative_path: str        # e.g. "src/net_module.c"
     content: str
-    function_addresses: list[int] = []
+    function_addresses: list[int] = Field(default_factory=list)
 
 
 class RecoveredProject(BaseModel):
@@ -19,7 +19,8 @@ class RecoveredProject(BaseModel):
     output_dir: Path
 
     header_file: Optional[RecoveredFile] = None       # include/recovered_types.h
-    source_files: list[RecoveredFile] = []
+    source_files: list[RecoveredFile] = Field(default_factory=list)
+    support_files: list[RecoveredFile] = Field(default_factory=list)
     readme: Optional[str] = None
 
     total_functions: int = 0
@@ -42,6 +43,11 @@ class RecoveredProject(BaseModel):
             p.write_text(self.header_file.content, encoding="utf-8")
 
         for sf in self.source_files:
+            p = base / sf.relative_path
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(sf.content, encoding="utf-8")
+
+        for sf in self.support_files:
             p = base / sf.relative_path
             p.parent.mkdir(parents=True, exist_ok=True)
             p.write_text(sf.content, encoding="utf-8")

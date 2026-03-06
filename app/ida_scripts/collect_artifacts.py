@@ -1,20 +1,13 @@
 """
-collect_artifacts.py — IDA Python script that runs INSIDE idat64.exe
+collect_artifacts.py runs inside IDA in headless mode.
 
 Launch command:
     idat64.exe -A -c -o<idb_path> -S"collect_artifacts.py" <dll_path>
 
-Optional script args (via -S):
-    --output <dir>  or  --output=<dir>
-
-Env vars consumed (best-effort):
-    RESOURCE_OUTPUT_DIR   — where to write JSON artifacts
-    RESOURCE_JOB_ID       — job id (for logging)
-
 Output layout (all under output dir):
     summary.json
     raw/globals.json
-    raw/func_<ADDR>.json   (one per function)
+    raw/func_<ADDR>.json
 
 Progress lines are printed to stdout and parsed by IDARunner:
     [RR] PROGRESS <done>/<total> ok=<n> fail=<n>
@@ -24,10 +17,10 @@ Progress lines are printed to stdout and parsed by IDARunner:
 
 import json
 import os
+import sys
 import traceback
 from pathlib import Path
 
-# ── IDA imports (available because this runs inside idat64) ──────────────────
 import idaapi
 import ida_funcs
 import ida_name
@@ -37,21 +30,24 @@ import ida_typeinf
 import idautils
 import idc
 
-# optional — Hex-Rays decompiler
 try:
     import ida_hexrays
 except ImportError:
     ida_hexrays = None
 
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
-# ── helpers ──────────────────────────────────────────────────────────────────
+from app.models.artifact import FunctionArtifact
+from app.pipeline.heuristics import dedupe_preserve, enrich_artifact_metadata
+
 
 def _log(msg: str) -> None:
     print(f"[RR] {msg}", flush=True)
 
 
 def _exit(code: int) -> None:
-    """IDA 8.x-safe exit helper."""
     try:
         if hasattr(idc, "qexit"):
             idc.qexit(code)
@@ -80,7 +76,6 @@ def _resolve_output_dir() -> Path:
     if env_output:
         return Path(env_output)
 
-    # Fallback for WSL -> Windows idat64 launches where env var propagation can fail.
     return Path.cwd()
 
 
@@ -162,7 +157,7 @@ def _collect_structs() -> list:
 
     idx = ida_struct.get_first_struc_idx()
     while idx not in (idc.BADADDR, -1):
-        sid = ida_struct.get_struc_id(idx)
+        sid = ida_struct.get_struc_by_idx(idx)
         if sid not in (idc.BADADDR, -1):
             name = ida_struct.get_struc_name(sid)
             size = ida_struct.get_struc_size(sid)
@@ -182,7 +177,12 @@ def _enable_hexrays() -> bool:
         return False
 
 
-def _collect_function(ea: int, export_addrs: set[int], hexrays_ready: bool) -> dict:
+def _collect_function(
+    ea: int,
+    export_addrs: set[int],
+    hexrays_ready: bool,
+    string_lookup: dict[int, str],
+) -> dict:
     func = ida_funcs.get_func(ea)
     name = idc.get_func_name(ea)
     demangled = ida_name.get_ea_name(ea, ida_name.GN_DEMANGLED | ida_name.GN_SHORT)
@@ -203,12 +203,16 @@ def _collect_function(ea: int, export_addrs: set[int], hexrays_ready: bool) -> d
         "callers": [],
         "stack_vars": [],
         "module": None,
+        "module_reason": None,
+        "string_refs": [],
+        "source_candidates": [],
+        "class_hint": None,
+        "guessed_name": None,
         "confidence_score": 0,
         "confidence_level": "LOW",
         "confidence_reasons": [],
     }
 
-    # Decompile
     if hexrays_ready:
         try:
             cfunc = ida_hexrays.decompile(ea)
@@ -224,19 +228,34 @@ def _collect_function(ea: int, export_addrs: set[int], hexrays_ready: bool) -> d
     else:
         art["decompile_error"] = "hexrays_unavailable"
 
-    # Callees (code refs from this function entry)
-    for xref in idautils.CodeRefsFrom(ea, True):
-        if ida_funcs.get_func(xref):
-            art["callees"].append(xref)
+    callee_addrs = set()
+    callers = set()
+    string_refs: list[str] = []
 
-    # Callers (code refs to this function)
+    for item_ea in idautils.FuncItems(ea):
+        for xref in idautils.CodeRefsFrom(item_ea, True):
+            callee_func = ida_funcs.get_func(xref)
+            if callee_func:
+                callee_addrs.add(int(callee_func.start_ea))
+            else:
+                callee_addrs.add(int(xref))
+        for dref in idautils.DataRefsFrom(item_ea):
+            value = string_lookup.get(int(dref))
+            if value:
+                string_refs.append(value)
+
     for xref in idautils.CodeRefsTo(ea, True):
-        art["callers"].append(xref)
+        caller_func = ida_funcs.get_func(xref)
+        callers.add(int(caller_func.start_ea if caller_func else xref))
 
-    return art
+    art["callees"] = sorted(callee_addrs)
+    art["callers"] = sorted(callers)
+    art["string_refs"] = dedupe_preserve(string_refs)
 
+    enriched = FunctionArtifact.model_validate(art)
+    enrich_artifact_metadata(enriched)
+    return enriched.model_dump()
 
-# ── main ─────────────────────────────────────────────────────────────────────
 
 def main() -> None:
     output_dir = _resolve_output_dir()
@@ -249,11 +268,9 @@ def main() -> None:
     hexrays_ready = _enable_hexrays()
     _log(f"Hex-Rays available: {hexrays_ready}")
 
-    # Auto-analysis must complete before we do anything
     idaapi.auto_wait()
     _log("Auto-analysis complete")
 
-    # ── Globals ──────────────────────────────────────────────────────────────
     globals_data = {
         "imports": _safe_collect("imports", _collect_imports),
         "exports": _safe_collect("exports", _collect_exports),
@@ -262,9 +279,7 @@ def main() -> None:
     }
 
     globals_json = json.dumps(globals_data, indent=2, default=int)
-    # canonical location used by CacheService
     (raw_dir / "globals.json").write_text(globals_json, encoding="utf-8")
-    # keep backward-compatible copy
     (output_dir / "globals.json").write_text(globals_json, encoding="utf-8")
 
     _log(
@@ -275,8 +290,12 @@ def main() -> None:
     )
 
     export_addrs = {int(e.get("address", 0)) for e in globals_data["exports"]}
+    string_lookup = {
+        int(s.get("address", 0)): str(s.get("value", ""))
+        for s in globals_data["strings"]
+        if s.get("address") is not None
+    }
 
-    # ── Functions ─────────────────────────────────────────────────────────────
     funcs = list(idautils.Functions())
     total = len(funcs)
     _log(f"Functions: {total}")
@@ -286,7 +305,7 @@ def main() -> None:
 
     for i, ea in enumerate(funcs):
         try:
-            art = _collect_function(ea, export_addrs, hexrays_ready)
+            art = _collect_function(ea, export_addrs, hexrays_ready, string_lookup)
             path = raw_dir / f"func_{ea:016X}.json"
             path.write_text(json.dumps(art, indent=2, default=int), encoding="utf-8")
             if art["decompile_ok"]:
@@ -297,11 +316,16 @@ def main() -> None:
             fail += 1
             _log(f"ERROR func 0x{ea:X}: {e}")
 
-        # Progress every 25 functions or at the end
         if (i + 1) % 25 == 0 or i == total - 1:
             print(f"[RR] PROGRESS {i + 1}/{total} ok={ok} fail={fail}", flush=True)
 
-    summary = {"total": total, "decompiled": ok, "failed": fail}
+    summary = {
+        "total": total,
+        "decompiled": ok,
+        "failed": fail,
+        "imports": len(globals_data["imports"]),
+        "strings": len(globals_data["strings"]),
+    }
     (output_dir / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
     print(f"[RR] DONE ok={ok} fail={fail}", flush=True)
 

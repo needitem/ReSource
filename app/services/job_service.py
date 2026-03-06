@@ -94,9 +94,7 @@ class JobService:
             self._log("캐시에서 아티팩트 로드 중…")
             artifacts = cache.load_artifacts(job.id)
             globals_ = cache.load_globals(job.id)
-            job.stats.total_functions = len(artifacts)
-            job.stats.decompiled = sum(1 for a in artifacts if a.decompile_ok)
-            job.stats.failed = sum(1 for a in artifacts if not a.decompile_ok)
+            self._update_stats_from_artifacts(job, artifacts)
         else:
             # Launch idat64 headless
             self._set_status(job, JobStatus.LOADING)
@@ -142,6 +140,7 @@ class JobService:
             # Load from JSON
             artifacts = cache.load_artifacts(job.id)
             globals_ = cache.load_globals(job.id)
+            self._update_stats_from_artifacts(job, artifacts)
             self._log(
                 f"추출 완료: {job.stats.decompiled} 성공 / {job.stats.failed} 실패"
             )
@@ -304,3 +303,9 @@ class JobService:
         log.info(msg)
         if self._on_log:
             self._on_log(msg)
+
+    @staticmethod
+    def _update_stats_from_artifacts(job: Job, artifacts: list[FunctionArtifact]) -> None:
+        job.stats.total_functions = len(artifacts)
+        job.stats.decompiled = sum(1 for a in artifacts if a.decompile_ok)
+        job.stats.failed = sum(1 for a in artifacts if not a.decompile_ok)

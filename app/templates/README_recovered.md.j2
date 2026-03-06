@@ -1,7 +1,8 @@
 # Recovered Project: {{ project.dll_name }}
 
 > **AUTO-GENERATED** by ReSource Recover. This is a best-effort reconstruction,
-> not the original source code.
+> not the original source code. The output is a buildable C++ skeleton with
+> recovered metadata and commented decompilation.
 
 ## Summary
 
@@ -15,13 +16,24 @@
 ## Modules
 
 {% for module_name, funcs in modules.items() %}
-### `src/{{ module_name }}.c`
+### `src/{{ module_name }}.cpp`
 - {{ funcs | length }} functions
 - HIGH confidence: {{ funcs | selectattr('confidence_level', 'equalto', 'HIGH') | list | length }}
 - MEDIUM confidence: {{ funcs | selectattr('confidence_level', 'equalto', 'MEDIUM') | list | length }}
 - LOW confidence: {{ funcs | selectattr('confidence_level', 'equalto', 'LOW') | list | length }}
 
 {% endfor %}
+
+## Build Output
+
+- `CMakeLists.txt` builds a shared library skeleton
+- `exports.def` is emitted when export addresses match recovered functions
+- Function bodies are placeholders that return `0`
+- Original decompilation is preserved as comments inside each stub
+{% if project.support_files | selectattr('relative_path', 'equalto', 'proxy/CMakeLists.txt') | list %}
+- `proxy/` contains a behavior-preserving forwarder DLL project
+- To use the proxy, rename the original DLL to `{{ project.dll_name }}_original.dll` and place it next to the built proxy DLL
+{% endif %}
 
 ## Confidence Legend
 
@@ -33,11 +45,12 @@
 
 ## Limitations
 
-- Variable names are IDA-generated (e.g. `v1`, `v2`)
-- Struct field names may be wrong
-- Virtual function tables not always resolved
-- C++ constructors/destructors may be misclassified
-- Inlined functions appear in multiple places
+- File and folder layout is heuristic when PDB/DWARF is unavailable
+- File hints come from strings, `__FILE__`, log tags, RTTI-like names, and callgraph clustering
+- Variable names are IDA-generated in comments only; buildable stubs use stable synthetic symbols
+- Struct layouts are opaque byte arrays sized from IDA metadata, not true field reconstructions
+- Function logic is not preserved as compilable code; only a placeholder body is emitted
+- Virtual function tables, exceptions, templates, and calling conventions are not reconstructed accurately
 
 ## Legal Notice
 

@@ -1,5 +1,5 @@
 """
-Phase B — Artifact Extractor.
+Phase B artifact extractor.
 
 Collects per-function data from IDA via MCP with bounded parallelism
 and retry logic. Saves raw JSON to artifacts/<job_id>/raw/.
@@ -14,13 +14,15 @@ from typing import Callable, Optional
 
 from app.mcp.client import McpClient, McpError
 from app.models.artifact import FunctionArtifact, GlobalArtifact
-from app.models.job import Job, JobStatus
+from app.models.job import Job
+from app.pipeline.heuristics import enrich_artifact_metadata
 
 log = logging.getLogger(__name__)
 
 
 class ExtractionProgress:
-    """Passed to progress callbacks."""
+    """Progress state passed to callbacks."""
+
     def __init__(self, total: int) -> None:
         self.total = total
         self.done = 0
@@ -63,28 +65,20 @@ class Extractor:
         self._raw_dir = artifacts_dir / job.id / "raw"
         self._raw_dir.mkdir(parents=True, exist_ok=True)
 
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
-
     async def run(
         self,
         on_progress: Optional[ProgressCallback] = None,
     ) -> tuple[list[FunctionArtifact], GlobalArtifact]:
         session_id = self.job.session_id
 
-        # 1. Collect global data (imports, exports, strings, structs)
         globals_ = await self._collect_globals(session_id)
         export_addrs = {e["address"] for e in globals_.exports if "address" in e}
 
-        # 2. List all functions
         func_list = await self.client.list_functions(session_id=session_id)
         log.info("Found %d functions", len(func_list))
         self.job.stats.total_functions = len(func_list)
 
         progress = ExtractionProgress(len(func_list))
-
-        # 3. Process in parallel with semaphore
         sem = asyncio.Semaphore(self.max_workers)
         tasks = [
             self._process_function(f, session_id, export_addrs, sem, progress, on_progress)
@@ -93,16 +87,11 @@ class Extractor:
         results: list[Optional[FunctionArtifact]] = await asyncio.gather(*tasks)
         artifacts = [a for a in results if a is not None]
 
-        # Persist summary
         self._save_summary(artifacts, globals_)
         return artifacts, globals_
 
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
-
     async def _collect_globals(self, session_id: Optional[str]) -> GlobalArtifact:
-        log.info("Collecting global artifacts…")
+        log.info("Collecting global artifacts")
         try:
             imports = await self.client.get_imports(session_id=session_id)
             exports = await self.client.get_exports(session_id=session_id)
@@ -112,10 +101,10 @@ class Extractor:
             log.warning("Global collect partial failure: %s", e)
             imports = exports = strings = structs = []
 
-        g = GlobalArtifact(imports=imports, exports=exports, strings=strings, structs=structs)
+        globals_ = GlobalArtifact(imports=imports, exports=exports, strings=strings, structs=structs)
         path = self._raw_dir / "globals.json"
-        path.write_text(g.model_dump_json(indent=2))
-        return g
+        path.write_text(globals_.model_dump_json(indent=2), encoding="utf-8")
+        return globals_
 
     async def _process_function(
         self,
@@ -164,32 +153,33 @@ class Extractor:
 
     async def _fill_artifact(self, artifact: FunctionArtifact, session_id: Optional[str]) -> None:
         addr = artifact.address
-        # Decompile (most important — timeout guarded)
         artifact.decompiled_code = await asyncio.wait_for(
             self.client.decompile(addr, session_id=session_id),
             timeout=self.timeout,
         )
-        # Type / prototype
+
         type_info = await self.client.infer_types(addr, session_id=session_id)
         artifact.prototype = type_info.get("prototype") if type_info else None
         artifact.type_ok = bool(artifact.prototype)
 
-        # Callees / xrefs (best-effort)
         callees = await self.client.get_callees(addr, session_id=session_id)
-        artifact.callees = [c.get("address", 0) for c in callees]
+        artifact.callees = [c.get("address", 0) for c in callees if c.get("address") is not None]
 
-        # Stack frame
         artifact.stack_vars = await self.client.get_stack_frame(addr, session_id=session_id)
+
+        enrich_artifact_metadata(artifact)
 
     def _save_artifact(self, artifact: FunctionArtifact) -> None:
         path = self._raw_dir / f"func_{artifact.address:016X}.json"
-        path.write_text(artifact.model_dump_json(indent=2))
+        path.write_text(artifact.model_dump_json(indent=2), encoding="utf-8")
 
     def _save_summary(self, artifacts: list[FunctionArtifact], globals_: GlobalArtifact) -> None:
         summary = {
             "total": len(artifacts),
             "decompiled": sum(1 for a in artifacts if a.decompile_ok),
             "failed": sum(1 for a in artifacts if not a.decompile_ok),
+            "imports": len(globals_.imports),
+            "strings": len(globals_.strings),
         }
         path = self._raw_dir.parent / "summary.json"
-        path.write_text(json.dumps(summary, indent=2))
+        path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
