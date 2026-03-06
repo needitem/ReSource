@@ -1,0 +1,12 @@
+cmake_minimum_required(VERSION 3.20)
+project({{ project_name }} LANGUAGES CXX)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+
+add_library(${PROJECT_NAME} SHARED proxy.cpp)
+
+if(MSVC)
+    target_link_options(${PROJECT_NAME} PRIVATE "/NOENTRY" "/DEF:${CMAKE_CURRENT_SOURCE_DIR}/proxy_exports.def")
+endif()

@@ -1,0 +1,5 @@
+LIBRARY {{ library_name }}
+EXPORTS
+{% for exp in exports %}
+    {{ exp.name }}={{ forward_module }}.{{ exp.name }}{% if exp.ordinal %} @{{ exp.ordinal }}{% endif %}
+{% endfor %}
